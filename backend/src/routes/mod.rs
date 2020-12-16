@@ -17,6 +17,9 @@ mod info;
 mod lobby;
 mod maps;
 
+// TODO: don't export this
+pub use lobby::GameReq;
+
 /// Handles all files located in the static folder
 #[get("/<file..>", rank = 6)]
 async fn files(file: PathBuf) -> Option<NamedFile> {

@@ -11,6 +11,8 @@ use std::fs::{create_dir, File};
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::SystemTime;
+use serde_json::Value;
+
 
 mod pw_config;
 mod pw_protocol;
@@ -31,7 +33,7 @@ pub struct PlanetWarsGame {
 }
 
 impl PlanetWarsGame {
-    pub fn new(state: pw_rules::PlanetWars, location: &str, name: &str, map: &str) -> Self {
+    pub fn new(match_ctx: MatchCtx, state: pw_rules::PlanetWars, location: &str, name: &str, map: &str) -> Self {
         let planet_map = state
             .planets
             .iter()
@@ -41,7 +43,7 @@ impl PlanetWarsGame {
         if let Err(_) = create_dir("games") {
             println!("'games' already exists");
         }
-
+        // TODO: don't do this. yuck!
         let file = File::create(format!("games/{}", location)).unwrap();
 
         Self {
@@ -56,9 +58,35 @@ impl PlanetWarsGame {
                 .and_then(|x| x.to_str())
                 .unwrap()
                 .to_string(),
-            match_ctx: todo!(),
+            match_ctx,
         }
     }
+
+    pub async fn run(mut self) -> Value {
+        while !self.state.is_finished() {
+            let player_messages = self.prompt_players().await;
+
+            self.state.repopulate();
+            for (player_id, turn) in player_messages {
+                self.execute_action(player_id, turn);
+            }
+            self.state.step();
+
+            // Log state
+            let state = pw_serializer::serialize(&self.state);
+            self.match_ctx.emit(serde_json::to_string(&state).unwrap());
+        }
+
+        // TODO: why is this
+        json!({
+            "winners": self.state.living_players(),
+            "turns": self.state.turn_num,
+            "name": self.name,
+            "map": self.map,
+            "time": SystemTime::now(),
+        })
+    }
+
 
     async fn prompt_players(&mut self) -> Vec<(usize, RequestResult<Vec<u8>>)> {
         // borrow these outside closure to make the borrow checker happy
@@ -149,73 +177,6 @@ impl PlanetWarsGame {
         })
     }
 }
-
-use serde_json::Value;
-
-impl PlanetWarsGame {
-    async fn run(mut self) -> Value {
-        while !self.state.is_finished() {
-            let player_messages = self.prompt_players().await;
-
-            self.state.repopulate();
-            for (player_id, turn) in player_messages {
-                self.execute_action(player_id, turn);
-            }
-            self.state.step();
-
-            // Log state
-            let state = pw_serializer::serialize(&self.state);
-            self.match_ctx.emit(serde_json::to_string(&state).unwrap());
-        }
-
-        // TODO: why is this
-        json!({
-            "winners": self.state.living_players(),
-            "turns": self.state.turn_num,
-            "name": self.name,
-            "map": self.map,
-            "time": SystemTime::now(),
-        })
-    }
-}
-
-// impl game::Controller for PlanetWarsGame {
-//     fn start(&mut self) -> Vec<HostMsg> {
-//         let mut updates = Vec::new();
-//         self.dispatch_state(self.state.living_players(), &mut updates);
-//         updates
-//     }
-
-//     fn step(&mut self, turns: Vec<PlayerMsg>) -> Vec<HostMsg> {
-//         self.turns += 1;
-
-//         let mut updates = Vec::new();
-
-//         let alive = self.state.living_players();
-
-//         self.state.repopulate();
-//         self.execute_commands(turns, &mut updates);
-//         self.state.step();
-
-//         self.dispatch_state(alive, &mut updates);
-
-//         updates
-//     }
-
-//     fn state(&mut self) -> Value {
-//         json!({
-//             "map": self.map,
-//         })
-//     }
-
-//     fn is_done(&mut self) -> Option<Value> {
-//         if self.state.is_finished() {
-//             }))
-//         } else {
-//             None
-//         }
-//     }
-// }
 
 fn get_epoch() -> SystemTime {
     SystemTime::UNIX_EPOCH

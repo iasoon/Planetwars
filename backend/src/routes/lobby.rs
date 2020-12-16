@@ -20,17 +20,17 @@ use std::time::SystemTime;
 /// The type required to build a game.
 /// (json in POST request).
 #[derive(Deserialize, Debug)]
-struct GameReq {
-    nop: u64,
-    max_turns: u64,
-    map: String,
-    name: String,
+pub struct GameReq {
+    pub nop: u64,
+    pub max_turns: u64,
+    pub map: String,
+    pub name: String,
 }
 
 /// Response when building a game.
 #[derive(Serialize)]
 struct GameRes {
-    players: Vec<u64>,
+    players: Vec<String>,
     state: Value,
 }
 
@@ -69,74 +69,50 @@ async fn state_get(
 #[post("/lobby", data = "<game_req>")]
 async fn post_game(
     game_req: Json<GameReq>,
-    tp: State<'_, ThreadPool>,
     gm: State<'_, GameManager>,
     state: State<'_, Games>,
 ) -> Result<Json<GameRes>, String> {
-    let game = build_builder(
-        tp.inner().clone(),
-        game_req.nop,
-        game_req.max_turns,
-        &game_req.map,
-        &game_req.name,
-    );
-    let game_id = gm.start_game(game).await.unwrap();
-    state.add_game(game_req.name.clone(), game_id);
+    let name = game_req.name.clone();
+    let mut gm_ = gm.inner().clone();
+    let tokens = gm_.create_game(game_req.into_inner());
 
-    match gm.get_state(game_id).await {
-        Some(Ok((state, conns))) => {
-            let players: Vec<u64> = conns
-                .iter()
-                .map(|conn| match conn {
-                    Connect::Waiting(_, key) => *key,
-                    _ => 0,
-                })
-                .collect();
+    // TODO, I guess
+    state.add_game(name, 0);
 
-            Ok(Json(GameRes { players, state }))
-        }
-        Some(Err(v)) => Err(serde_json::to_string(&v).unwrap()),
-        None => Err(String::from("Fuck the world")),
-    }
+    Ok(Json(GameRes {
+        players: tokens.iter().map(hex::encode).collect(),
+        state: Value::Null,
+    }))
 }
 
-/// Generate random ID for the game, used as filename
-fn generate_string_id() -> String {
-    rand::thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
-        .take(15)
-        .collect::<String>()
-        + ".json"
-}
+// /// game::Manager spawns game::Builder to start games.
+// /// This returns such a Builder for a planetwars game.
+// fn build_builder(
+//     pool: ThreadPool,
+//     number_of_clients: u64,
+//     max_turns: u64,
+//     map: &str,
+//     name: &str,
+// ) -> game::Builder<planetwars::PlanetWarsGame> {
+//     let config = planetwars::Config {
+//         map_file: map.to_string(),
+//         max_turns: max_turns,
+//     };
 
-/// game::Manager spawns game::Builder to start games.
-/// This returns such a Builder for a planetwars game.
-fn build_builder(
-    pool: ThreadPool,
-    number_of_clients: u64,
-    max_turns: u64,
-    map: &str,
-    name: &str,
-) -> game::Builder<planetwars::PlanetWarsGame> {
-    let config = planetwars::Config {
-        map_file: map.to_string(),
-        max_turns: max_turns,
-    };
+//     let game = planetwars::PlanetWarsGame::new(
+//         config.create_game(number_of_clients as usize),
+//         &generate_string_id(),
+//         name,
+//         map,
+//     );
 
-    let game = planetwars::PlanetWarsGame::new(
-        config.create_game(number_of_clients as usize),
-        &generate_string_id(),
-        name,
-        map,
-    );
+//     let players: Vec<PlayerId> = (0..number_of_clients).collect();
 
-    let players: Vec<PlayerId> = (0..number_of_clients).collect();
-
-    game::Builder::new(players.clone(), game).with_step_lock(
-        StepLock::new(players.clone(), pool.clone())
-            .with_timeout(std::time::Duration::from_secs(1)),
-    )
-}
+//     game::Builder::new(players.clone(), game).with_step_lock(
+//         StepLock::new(players.clone(), pool.clone())
+//             .with_timeout(std::time::Duration::from_secs(1)),
+//     )
+// }
 
 /// Fuels the lobby routes
 pub fn fuel(routes: &mut Vec<Route>) {
@@ -177,41 +153,42 @@ pub async fn get_states(
     game_ids: &Vec<(String, u64, SystemTime)>,
     manager: &GameManager,
 ) -> Result<Vec<GameState>, String> {
-    let mut states = Vec::new();
-    let gss = join_all(
-        game_ids
-            .iter()
-            .cloned()
-            .map(|(name, id, time)| manager.get_state(id).map(move |f| (f, name, time))),
-    )
-    .await;
+    return Ok(Vec::new());
+    // let mut states = Vec::new();
+    // let gss = join_all(
+    //     game_ids
+    //         .iter()
+    //         .cloned()
+    //         .map(|(name, id, time)| manager.get_state(id).map(move |f| (f, name, time))),
+    // )
+    // .await;
 
-    for (gs, name, time) in gss {
-        if let Some(state) = gs {
-            match state {
-                Ok((state, conns)) => {
-                    let players: Vec<PlayerStatus> =
-                        conns.iter().cloned().map(|x| x.into()).collect();
-                    let connected = players.iter().filter(|x| x.connected).count();
+    // for (gs, name, time) in gss {
+    //     if let Some(state) = gs {
+    //         match state {
+    //             Ok((state, conns)) => {
+    //                 let players: Vec<PlayerStatus> =
+    //                     conns.iter().cloned().map(|x| x.into()).collect();
+    //                 let connected = players.iter().filter(|x| x.connected).count();
 
-                    states.push(GameState::Playing {
-                        name: name,
-                        total: players.len(),
-                        players,
-                        connected,
-                        map: String::new(),
-                        state,
-                        time,
-                    });
-                }
-                Err(value) => {
-                    let state: FinishedState = serde_json::from_value(value).expect("Shit failed");
-                    states.push(state.into());
-                }
-            }
-        }
-    }
+    //                 states.push(GameState::Playing {
+    //                     name: name,
+    //                     total: players.len(),
+    //                     players,
+    //                     connected,
+    //                     map: String::new(),
+    //                     state,
+    //                     time,
+    //                 });
+    //             }
+    //             Err(value) => {
+    //                 let state: FinishedState = serde_json::from_value(value).expect("Shit failed");
+    //                 states.push(state.into());
+    //             }
+    //         }
+    //     }
+    // }
 
-    states.sort();
-    Ok(states)
+    // states.sort();
+    // Ok(states)
 }

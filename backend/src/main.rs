@@ -6,10 +6,10 @@ extern crate serde_derive;
 #[macro_use]
 extern crate serde_json;
 
-extern crate async_std;
 extern crate futures;
 extern crate mozaic_core;
 extern crate rand;
+extern crate hex;
 
 extern crate figment;
 
@@ -24,6 +24,7 @@ extern crate rocket_contrib;
 #[macro_use]
 extern crate educe;
 
+use crate::game_manager::GameManager;
 use figment::{providers::{Serialized, Env}};
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
@@ -32,6 +33,7 @@ use std::net::SocketAddr;
 
 use futures::executor::ThreadPool;
 use futures::future::FutureExt;
+use tokio::runtime::Runtime;
 
 
 mod planetwars;
@@ -119,10 +121,10 @@ async fn rocket() -> rocket::Rocket {
         .finish();
     tracing::subscriber::set_global_default(sub).unwrap();
 
-    let pool = ThreadPool::builder().create().unwrap();
-    let gm = todo!();
+    let tokio_runtime  = Runtime::new().expect("failed to create runtime");
+    let gm = GameManager::create(tokio_runtime.handle().clone());
+    gm.start_ws_server("0.0.0.0:8080");
 
-    async_std::task::sleep(std::time::Duration::from_millis(200)).await;
 
     let mut routes = Vec::new();
     routes::fuel(&mut routes);
@@ -133,7 +135,6 @@ async fn rocket() -> rocket::Rocket {
 
     rocket::custom(figment)
         .manage(gm)
-        .manage(pool)
         .manage(Games::new())
         .attach(AdHoc::config::<PWConfig>())    // Manage the config
         .mount("/", routes)

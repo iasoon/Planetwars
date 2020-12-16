@@ -13,6 +13,7 @@ rand = { version = "0.7.3", default-features = true }
 async-std = { version = "1.7.0", features = ["attributes"] }
 futures = { version = "0.3.8", features = ["executor", "thread-pool"] }
 tokio = { version = "0.3", features = ["full"] }
+hex = { version = "0.4", features = ["serde"] }
 
 figment = "0.9.4"
 
