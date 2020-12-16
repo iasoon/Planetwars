@@ -8,7 +8,7 @@ extern crate serde_json;
 
 extern crate async_std;
 extern crate futures;
-extern crate mozaic;
+extern crate mozaic_core;
 extern crate rand;
 
 extern crate figment;
@@ -29,16 +29,14 @@ use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 use std::net::SocketAddr;
 
-use mozaic::modules::game;
 
 use futures::executor::ThreadPool;
 use futures::future::FutureExt;
 
-use mozaic::graph;
-use mozaic::modules::*;
 
 mod planetwars;
 mod routes;
+mod game_manager;
 mod util;
 use util::Games;
 use util::COLOURS;
@@ -116,16 +114,13 @@ fn get_host_name(host_name: &str) -> impl Fn(&HashMap<String, Value>) -> tera::R
 /// Async main function, starting logger, graph and rocket
 #[rocket::launch]
 async fn rocket() -> rocket::Rocket {
-    let fut = graph::set_default();
-
     let sub = FmtSubscriber::builder()
         .with_env_filter(EnvFilter::from_default_env())
         .finish();
     tracing::subscriber::set_global_default(sub).unwrap();
 
     let pool = ThreadPool::builder().create().unwrap();
-    pool.spawn_ok(fut.map(|_| ()));
-    let gm = create_game_manager("0.0.0.0:9142", pool.clone()).await;
+    let gm = todo!();
 
     async_std::task::sleep(std::time::Duration::from_millis(200)).await;
 
@@ -157,14 +152,14 @@ async fn rocket() -> rocket::Rocket {
         }))
 }
 
-/// Creates the actual game_manager
-/// Opening tcp socket etc..
-async fn create_game_manager(tcp: &str, pool: ThreadPool) -> game::Manager {
-    let addr = tcp.parse::<SocketAddr>().unwrap();
-    let (gmb, handle) = game::Manager::builder(pool.clone());
-    pool.spawn_ok(handle.map(|_| {println!("I'm done")}));
-    let ep = TcpEndpoint::new(addr, pool.clone());
+// Creates the actual game_manager
+// Opening tcp socket etc..
+// async fn create_game_manager(tcp: &str, pool: ThreadPool) -> game::Manager {
+//     let addr = tcp.parse::<SocketAddr>().unwrap();
+//     let (gmb, handle) = game::Manager::builder(pool.clone());
+//     pool.spawn_ok(handle.map(|_| {println!("I'm done")}));
+//     let ep = TcpEndpoint::new(addr, pool.clone());
 
-    let gmb = gmb.add_endpoint(ep, "TCP endpoint");
-    gmb.build("games/games.json", pool).await.unwrap()
-}
+//     let gmb = gmb.add_endpoint(ep, "TCP endpoint");
+//     gmb.build("games/games.json", pool).await.unwrap()
+// }

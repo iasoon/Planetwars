@@ -1,13 +1,10 @@
 use crate::planetwars::{self, FinishedState};
 use crate::util::*;
+use crate::game_manager::GameManager;
 
 use rocket::{Route, State};
 use rocket_contrib::json::Json;
 use rocket_contrib::templates::Template;
-
-use mozaic::modules::types::*;
-use mozaic::modules::{game, StepLock};
-use mozaic::util::request::Connect;
 
 use async_std::fs;
 use async_std::prelude::StreamExt;
@@ -40,7 +37,7 @@ struct GameRes {
 /// Standard get function for the lobby tab
 #[get("/lobby")]
 async fn get_lobby(
-    gm: State<'_, game::Manager>,
+    gm: State<'_, GameManager>,
     state: State<'_, Games>,
 ) -> Result<Template, String> {
     let maps = get_maps().await?;
@@ -52,7 +49,7 @@ async fn get_lobby(
 /// The lobby get's this automatically on load and on refresh.
 #[get("/partial/state")]
 async fn state_get(
-    gm: State<'_, game::Manager>,
+    gm: State<'_, GameManager>,
     state: State<'_, Games>,
 ) -> Result<Template, String> {
     let games = get_states(&state.get_games(), &gm).await?;
@@ -73,7 +70,7 @@ async fn state_get(
 async fn post_game(
     game_req: Json<GameReq>,
     tp: State<'_, ThreadPool>,
-    gm: State<'_, game::Manager>,
+    gm: State<'_, GameManager>,
     state: State<'_, Games>,
 ) -> Result<Json<GameRes>, String> {
     let game = build_builder(
@@ -178,7 +175,7 @@ async fn get_maps() -> Result<Vec<Map>, String> {
 
 pub async fn get_states(
     game_ids: &Vec<(String, u64, SystemTime)>,
-    manager: &game::Manager,
+    manager: &GameManager,
 ) -> Result<Vec<GameState>, String> {
     let mut states = Vec::new();
     let gss = join_all(

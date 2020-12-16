@@ -1,5 +1,7 @@
-use mozaic::modules::game;
-use mozaic::modules::types::{Data, HostMsg, PlayerMsg};
+use mozaic_core::match_context::{MatchCtx, RequestResult};
+use tokio::time::Duration;
+use futures::stream::futures_unordered::FuturesUnordered;
+use futures::{FutureExt, StreamExt};
 
 use serde_json;
 
@@ -18,11 +20,11 @@ pub use pw_config::{Config, Map};
 use pw_protocol::{self as proto, CommandError};
 use pw_rules::Dispatch;
 
+// TODO: rename game -> match
 pub struct PlanetWarsGame {
+    match_ctx: MatchCtx,
     state: pw_rules::PlanetWars,
     planet_map: HashMap<String, usize>,
-    log_file_loc: String,
-    log_file: File,
     turns: u64,
     name: String,
     map: String,
@@ -45,8 +47,8 @@ impl PlanetWarsGame {
         Self {
             state,
             planet_map,
-            log_file_loc: location.to_string(),
-            log_file: file,
+            // log_file_loc:location.to_string(),
+            // log_file: file ,
             turns: 0,
             name: name.to_string(),
             map: PathBuf::from(map)
@@ -54,65 +56,38 @@ impl PlanetWarsGame {
                 .and_then(|x| x.to_str())
                 .unwrap()
                 .to_string(),
+            match_ctx: todo!(),
         }
     }
 
-    fn dispatch_state(&mut self, were_alive: Vec<usize>, updates: &mut Vec<HostMsg>) {
-        let state = pw_serializer::serialize(&self.state);
-        write!(
-            self.log_file,
-            "{}\n",
-            serde_json::to_string(&state).unwrap()
-        )
-        .unwrap();
+    async fn prompt_players(&mut self) -> Vec<(usize, RequestResult<Vec<u8>>)> {
+        // borrow these outside closure to make the borrow checker happy
+        let state = &self.state;
+        let match_ctx = &mut self.match_ctx;
 
-        for player in self
-            .state
-            .players
-            .iter()
-            .filter(|p| were_alive.contains(&p.id))
-        {
-            let state = pw_serializer::serialize_rotated(&self.state, player.id);
-            let state = if player.alive && !self.state.is_finished() {
-                proto::ServerMessage::GameState(state)
-            } else {
-                proto::ServerMessage::FinalState(state)
-            };
-
-            updates.push(HostMsg::Data(
-                Data {
-                    value: serde_json::to_string(&state).unwrap(),
-                },
-                Some(player.id as u64),
-            ));
-
-            if !player.alive || self.state.is_finished() {
-                updates.push(HostMsg::Kick(player.id as u64));
-            }
-        }
+        self.state.players.iter().filter(|p| p.alive).map(move |player| {
+            let state_for_player =
+                pw_serializer::serialize_rotated(&state, player.id);
+            match_ctx.request(
+                player.id.try_into().unwrap(),
+                serde_json::to_vec(&state_for_player).unwrap(),
+                Duration::from_millis(1000),
+            ).map(move |resp| {
+                (player.id, resp)
+            })
+        })
+        .collect::<FuturesUnordered<_>>()
+        .collect::<Vec<_>>()
+        .await
     }
 
-    fn execute_commands<'a>(&mut self, turns: Vec<PlayerMsg>, updates: &mut Vec<HostMsg>) {
-        for PlayerMsg { id, data } in turns.into_iter() {
-            let player_num: usize = (id).try_into().unwrap();
-            let action = proto::ServerMessage::PlayerAction(self.execute_action(player_num, data));
-            let serialized_action = serde_json::to_string(&action).unwrap();
-            updates.push(HostMsg::Data(
-                Data {
-                    value: serialized_action,
-                },
-                Some(id),
-            ));
-        }
-    }
-
-    fn execute_action<'a>(&mut self, player_num: usize, turn: Option<Data>) -> proto::PlayerAction {
+    fn execute_action<'a>(&mut self, player_num: usize, turn: RequestResult<Vec<u8>>) -> proto::PlayerAction {
         let turn = match turn {
-            None => return proto::PlayerAction::Timeout,
-            Some(turn) => turn.value,
+            Err(_timeout) => return proto::PlayerAction::Timeout,
+            Ok(data) => data,
         };
 
-        let action: proto::Action = match serde_json::from_str(&turn) {
+        let action: proto::Action = match serde_json::from_slice(&turn) {
             Err(err) => return proto::PlayerAction::ParseError(err.to_string()),
             Ok(action) => action,
         };
@@ -177,50 +152,70 @@ impl PlanetWarsGame {
 
 use serde_json::Value;
 
-impl game::Controller for PlanetWarsGame {
-    fn start(&mut self) -> Vec<HostMsg> {
-        let mut updates = Vec::new();
-        self.dispatch_state(self.state.living_players(), &mut updates);
-        updates
-    }
+impl PlanetWarsGame {
+    async fn run(mut self) -> Value {
+        while !self.state.is_finished() {
+            let player_messages = self.prompt_players().await;
 
-    fn step(&mut self, turns: Vec<PlayerMsg>) -> Vec<HostMsg> {
-        self.turns += 1;
+            self.state.repopulate();
+            for (player_id, turn) in player_messages {
+                self.execute_action(player_id, turn);
+            }
+            self.state.step();
 
-        let mut updates = Vec::new();
+            // Log state
+            let state = pw_serializer::serialize(&self.state);
+            self.match_ctx.emit(serde_json::to_string(&state).unwrap());
+        }
 
-        let alive = self.state.living_players();
-
-        self.state.repopulate();
-        self.execute_commands(turns, &mut updates);
-        self.state.step();
-
-        self.dispatch_state(alive, &mut updates);
-
-        updates
-    }
-
-    fn state(&mut self) -> Value {
+        // TODO: why is this
         json!({
+            "winners": self.state.living_players(),
+            "turns": self.state.turn_num,
+            "name": self.name,
             "map": self.map,
+            "time": SystemTime::now(),
         })
     }
-
-    fn is_done(&mut self) -> Option<Value> {
-        if self.state.is_finished() {
-            Some(json!({
-                "winners": self.state.living_players(),
-                "turns": self.state.turn_num,
-                "name": self.name,
-                "map": self.map,
-                "file": self.log_file_loc,
-                "time": SystemTime::now(),
-            }))
-        } else {
-            None
-        }
-    }
 }
+
+// impl game::Controller for PlanetWarsGame {
+//     fn start(&mut self) -> Vec<HostMsg> {
+//         let mut updates = Vec::new();
+//         self.dispatch_state(self.state.living_players(), &mut updates);
+//         updates
+//     }
+
+//     fn step(&mut self, turns: Vec<PlayerMsg>) -> Vec<HostMsg> {
+//         self.turns += 1;
+
+//         let mut updates = Vec::new();
+
+//         let alive = self.state.living_players();
+
+//         self.state.repopulate();
+//         self.execute_commands(turns, &mut updates);
+//         self.state.step();
+
+//         self.dispatch_state(alive, &mut updates);
+
+//         updates
+//     }
+
+//     fn state(&mut self) -> Value {
+//         json!({
+//             "map": self.map,
+//         })
+//     }
+
+//     fn is_done(&mut self) -> Option<Value> {
+//         if self.state.is_finished() {
+//             }))
+//         } else {
+//             None
+//         }
+//     }
+// }
 
 fn get_epoch() -> SystemTime {
     SystemTime::UNIX_EPOCH

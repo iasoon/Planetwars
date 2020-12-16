@@ -1,5 +1,4 @@
 use crate::planetwars::FinishedState;
-use mozaic::util::request::Connect;
 use serde_json::Value;
 
 use std::cmp::Ordering;
@@ -29,31 +28,32 @@ pub struct PlayerStatus {
     pub reconnecting: bool,
     pub value: String,
 }
-impl From<Connect> for PlayerStatus {
-    fn from(value: Connect) -> Self {
-        match value {
-            Connect::Connected(_, name) => PlayerStatus {
-                waiting: false,
-                connected: true,
-                reconnecting: false,
-                value: name,
-            },
-            Connect::Reconnecting(_, name) => PlayerStatus {
-                waiting: false,
-                connected: true,
-                reconnecting: true,
-                value: name,
-            },
-            Connect::Waiting(_, key) => PlayerStatus {
-                waiting: true,
-                connected: false,
-                reconnecting: false,
-                value: format!("Key: {}", key),
-            },
-            _ => panic!("No playerstatus possible from Connect::Request"),
-        }
-    }
-}
+// Obsolete, I guess
+// impl From<Connect> for PlayerStatus {
+//     fn from(value: Connect) -> Self {
+//         match value {
+//             Connect::Connected(_, name) => PlayerStatus {
+//                 waiting: false,
+//                 connected: true,
+//                 reconnecting: false,
+//                 value: name,
+//             },
+//             Connect::Reconnecting(_, name) => PlayerStatus {
+//                 waiting: false,
+//                 connected: true,
+//                 reconnecting: true,
+//                 value: name,
+//             },
+//             Connect::Waiting(_, key) => PlayerStatus {
+//                 waiting: true,
+//                 connected: false,
+//                 reconnecting: false,
+//                 value: format!("Key: {}", key),
+//             },
+//             _ => panic!("No playerstatus possible from Connect::Request"),
+//         }
+//     }
+// }
 
 fn partial_cmp(a: &SystemTime, b: &SystemTime) -> Option<Ordering> {
     b.partial_cmp(a)
